@@ -1,0 +1,348 @@
+---
+title: "Rna-seq analysis"
+author: "Maxim_Nesterenko"
+date: "March 29, 2017"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(pheatmap)
+#
+library(dplyr)
+library(plotly)
+library(VennDiagram)
+options(width=120)
+```
+
+### `Считываем таблицы и убираем "выброс" (образец "treg_NBP_patient3")`
+
+```{r load, warning=FALSE, message=FALSE}
+
+counts <- read.csv("GSE89225_Illumina_counts.csv", row.names=1)
+conditions <- read.csv("conditions.csv", row.names=1)
+
+# изменения данных 
+counts <- select(counts, -(treg_NBP_patient3))
+# изменения условия
+# при попытки удалить таким образом : conditions <- filter(conditions, -("treg_NBP_patient3")) - при создании heatmap`а выскакивает ошибка, про которую я тебе писал
+conditions  <- conditions[-12, ]
+
+
+mart <- read.table("human_mart.txt", sep="\t", header=1, check.names = F)
+
+```
+
+
+### `Sanity checks`
+Нужно всегда проверять длины библиотек и количество rRNA reads, которые оказались в библиотеке. Количество ридов можно проверять после выравнивания или после квантификации.
+
+```{r sanity_check, message=FALSE, warning=FALSE, error=FALSE}
+proteinCoding <- mart[mart[, 3] == "protein_coding", ]
+rRNA <- mart[mart[, 3] == "rRNA", ]
+
+pcCounts <- counts[rownames(counts) %in% as.character(proteinCoding[, 1]), ]
+rrnaCounts <- counts[rownames(counts) %in% as.character(rRNA[, 1]), ]
+
+sampleCount <- ncol(counts)
+toPlot <- data.frame(
+  sample=rep(colnames(counts), 3),
+  value=c(colSums(counts) - colSums(pcCounts) - colSums(rrnaCounts), 
+          colSums(pcCounts), 
+          colSums(rrnaCounts)),
+  type=c(rep("other", sampleCount), 
+         rep("protein coding", sampleCount),
+         rep("rrna", sampleCount))
+)
+
+plot <- ggplot(data=toPlot, aes(x=sample, y=value, fill=type)) +
+  geom_bar(stat="identity") + theme_bw() + 
+  theme(axis.text.x = element_text(angle=90, vjust=0.5))
+plot
+
+```
+
+
+### `DESeq2`
+DESeq2 -- это царь-библиотека необходимая для работы с данными RNA-seq. Тут и дифференциальная экспрессия, и нормализации, и PCA-plots.
+
+```{r deseq_prep, cache=TRUE, message=FALSE, warning=FALSE}
+#cache = True - исполнение этого блока лишь 1 раз
+#design = то, что указано в конце - самое важное
+
+
+##### Treg_cell vs Tconv_cells
+
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = conditions,
+                              design = ~ tissue + cells)
+dds <- dds[rowSums(counts(dds)) > 20, ]
+dds <- DESeq(dds)
+vst_dds <- vst(dds)
+counts.norm <- assay(vst_dds)
+
+
+##### Normal tissue vs Tumor tissue
+dds_2 <- DESeqDataSetFromMatrix(countData = counts, colData = conditions, 
+                                design = ~ tissue + tissue)
+dds_2 <- dds_2[rowSums(counts(dds_2)) > 20, ]
+dds_2 <- DESeq(dds_2)
+vst_dds_2 <- vst(dds_2)
+counts.norm_2 <- assay(vst_dds_2)
+
+```
+
+### `Анализ главных компонент (PCA) и выявление "выброса"`
+
+```{r PCA, warning=FALSE, message=FALSE, error=FALSE}
+
+pca_data <- prcomp(t(counts.norm))
+percents <- pca_data$sdev^2 / sum(pca_data$sdev^2)
+to_plot <- t(counts.norm) %*% pca_data$rotation
+
+
+####
+df_to_plot <- as.data.frame(to_plot)
+# Чтобы понять, какой образец является "выбросом", можно обратиться к матрице значений главных компонент. Увидим, что наиболее "странными" значениями по первой и второй компоненте характеризуется образец t_reg_NBP3. Его и следует удалить из анализа. Но также проверим это и с помощью графика, добавив строчку кода: geom_text(alpha=1, size=3, aes(label=gdata$name))
+#####
+
+
+gdata <- data.frame(
+  x=to_plot[, 1],
+  y=to_plot[, 2],
+  tissue=conditions[, 1],
+  cells=conditions[, 2],
+  name=rownames(conditions)
+)
+
+
+viz <- ggplot(data=gdata, aes(x=x, y=y, color=cells, shape=tissue, text=name)) +
+  geom_point(size=3) + theme_bw()  +
+  xlab(paste0("PC", 1, ": ", formatC(100 * percents[1], digits=4), "%")) +
+  ylab(paste0("PC", 2, ": ", formatC(100 * percents[2], digits=4), "%")) +
+  geom_text(alpha=1, size=3, aes(label=gdata$name))
+
+viz
+#по топ-50 генам?  ntop
+plotPCA(vst_dds, intgroup=c("tissue", "cells")) + theme_bw()
+#top 50 - красивее покажут вариации, возникшие из-за условий
+
+
+
+```
+
+### `Дифференциальная экспрессия`
+Рассмотрим 2 дизайна эксперимента: 1) тип T-лимфоцитов, 2) нормальная ткань и опухоль молочной железы (breast tumor). Отсортируем результаты по статистике
+
+```{r diff_exp, message=FALSE, warning=FALSE}
+# иногда ставит NA - если различия незначительные? 
+
+# Treg vs Tconv
+res <- results(dds)
+res
+mcols(res)$description
+res <- res[order(res[, 4]), ]
+res
+
+# NBP vs breast tumor
+
+res_2 <- results(dds_2)
+res_2 <- res_2[order(res_2[, 4]), ]
+
+```
+
+Самый обычный способ визуализировать данные дифф.экспрессии -- это volcano plot. По оси x мы будем откладывать log fold change, а по y - adjusted p value. Cовместим графики по 2 дизайнам эксперимента. 
+
+```{r volcano_plot, message=FALSE, warning=FALSE}
+
+Tcell_types <- data.frame(
+  x=res$log2FoldChange,
+  y=-log10(res$padj),
+  Significant=ifelse(res$padj < 0.01, "significant", "not significant"),
+  design_type="Treg vs Tconv"
+)
+
+Tissue_types <- data.frame(
+  x=res_2$log2FoldChange, 
+  y=-log10(res_2$padj), 
+  Significant=ifelse(res_2$padj < 0.01, "significant", "not significant"),
+  design_type="NBP vs breast tumor"
+)
+
+merged_designs <- rbind(Tcell_types, Tissue_types)
+
+ggplot(merged_designs, aes(x=x, y=y, colour = factor(Significant))) +
+  geom_point(size=1) + theme_bw()+
+  facet_grid(. ~ design_type) +
+  scale_color_manual(values = c("significant" = "red", "not significant" = "black"))+
+  geom_hline(yintercept = -log10(0.01), colour = "red") +
+  xlab("Log fold change")+
+  ylab("Adjusted p.value")
+
+
+```
+
+### `HEATMAP`
+Также мы можем построить тепловую карту (heatmap), отсортировав гены по статистике.
+
+```{r heatmap, warning=FALSE, message=FALSE}
+
+counts.norm <- counts(dds, normalized=TRUE)
+
+#### HEATMAP of all genes (33061)
+#png("heatmap_large_html_without_outlier.png", width=6, height=20, units="in", res=300)
+
+to_visualise <- counts.norm[rownames(res), order(conditions[, 2])]
+to_visualise <- t(apply(to_visualise, 1, function(r) {
+  (r - min(r)) / (max(r) - min(r))
+}))
+
+
+pheatmap(to_visualise, 
+         show_rownames = F, cluster_rows = F,
+         cluster_cols=F,
+         annotation_col = conditions)
+#dev.off()
+``` 
+
+### `PATHWAYS` 
+
+```{r pathways, message=FALSE, warning=FALSE}
+kkeys <- keys(org.Hs.eg.db, keytype="ENSEMBL")
+goAnno <- AnnotationDbi::select(org.Hs.eg.db, keys=kkeys, 
+                                keytype="ENSEMBL", columns=c("GOALL", "ONTOLOGYALL", "SYMBOL"))
+goAnno <- tbl_df(goAnno)
+goAnno <- filter(goAnno, GOALL=="GO:0007159")
+# or you can pick ENTREZ, or SYMBOL, or whatever you want
+genesToVisualise <- goAnno$ENSEMBL
+
+```
+
+### `Heatmap генов интереса`
+
+```{r heatmap_2 , warning=FALSE, message=FALSE}
+
+#### Genes of interest (449 genes from pathway in our data)
+
+# a) choose intresting
+res_of_interest <- intersect(rownames(res), genesToVisualise)
+new_res <- res[res_of_interest, ]
+# b) order
+ord_new_res <- new_res[order(new_res[, 4]),]
+# c) prepare for visualization
+to_visualise_3 <- counts.norm[rownames(ord_new_res), order(conditions[, 2])]
+to_visualise_4 <- t(apply(to_visualise_3, 1, function(r) {
+  (r - min(r)) / (max(r) - min(r))
+}))
+
+# gene`s of interest heatmap
+#png("heatmap_genes_of_interest_main.png", width=6, height=20, units="in", res=300)
+pheatmap(to_visualise_4, 
+         show_rownames = F, cluster_rows = F,
+         cluster_cols=F,
+         annotation_col = conditions, 
+         main = "GO:0007159: leukocyte cell-cell adhesion")
+#dev.off()
+```
+
+
+### `clusterProfiler`
+
+Библиотека содержит в себе большое количество утилит для аннотации наборов генов.
+
+```{r clusterProfiler, warning=FALSE, message=FALSE}
+
+##### Tcell_types
+genes_Tcell_types <- bitr(rownames(res),
+              fromType = "ENSEMBL",
+              toType = c("ENTREZID", "SYMBOL"), 
+              OrgDb = org.Hs.eg.db)
+head(genes_Tcell_types)
+
+# выброс дубликатов 
+genes_Tcell_types <- genes_Tcell_types[!duplicated(genes_Tcell_types[, 1]), ]
+rownames(genes_Tcell_types) <- genes_Tcell_types[, 1]
+res$ENSEMBL <- rownames(res)
+
+merged <- merge(as.data.frame(res), genes_Tcell_types)
+
+
+##### Tissue_types
+genes_Tissue_types <- bitr(rownames(res_2),
+                           fromType = "ENSEMBL", 
+                           toType = c("ENTREZID", "SYMBOL"),
+                           OrgDb = org.Hs.eg.db)
+# выброс дупликатов
+genes_Tissue_types <- genes_Tissue_types[!duplicated(genes_Tissue_types[, 1]),]
+rownames(genes_Tissue_types) <- genes_Tcell_types[, 1]
+res_2$ENSEMBL <- rownames(res_2)
+
+merged_Tissue_types  <- merge(as.data.frame(res_2), genes_Tissue_types)
+
+```
+
+### `GO-аннотация`
+
+```{r go_annot, message=FALSE, warning=FALSE}
+
+##### DiffExpGenes Tcell_types
+diffExpGenes_Tcell_types <- merged[which(merged$padj < 0.01), 8]
+universe <- as.character(merged[, 8])
+
+
+# enrichment GO-annotation for Tcell_types - design
+ego <- enrichGO(gene          = diffExpGenes_Tcell_types,
+                universe      = universe,
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                readable= TRUE)
+#dotplot(ego)
+
+##### DiffExpGenes Tissue_types
+diffExpGenes_Tissue_types <- merged[which(merged_Tissue_types$padj < 0.01), 8]
+universe_Tissue_types <- as.character(merged_Tissue_types[, 8])
+
+# enrichent GO-annotation for Tissue_types - design
+ego_Tissue_types <- enrichGO( gene = diffExpGenes_Tissue_types,
+                              universe = universe_Tissue_types, 
+                              OrgDb = org.Hs.eg.db,
+                              ont = "BP", 
+                              pAdjustMethod = "BH",
+                              pvalueCutoff = 0.01,
+                              qvalueCutoff = 0.05,
+                              readable = TRUE)
+
+#dotplot(ego_Tissue_types)
+
+```
+
+
+## Диаграмма Венна
+Сопоставим данные по дифференциальной экспрессии генов в двух вышеуказанных экспериментах. 
+```{r Venn, message=FALSE, warning=FALSE}
+#### VennDiagram
+
+common_diffExpGenes <- intersect(diffExpGenes_Tcell_types, diffExpGenes_Tissue_types)
+
+grid.newpage()
+draw.pairwise.venn(length(diffExpGenes_Tcell_types),
+                   length(diffExpGenes_Tissue_types),
+                   length(common_diffExpGenes),
+                   category = c("Treg vs Tconv", "Tumor tissue vs Normal tissue"),
+                   cat.dist = c(0.05, 0.05),
+                   cat.pos = c(-0.7, 0.5),
+                   fill = c("cadetblue2", "antiquewhite1"), 
+                   col = c("cadetblue2", "antiquewhite1"),
+                   lwd = rep(0.5 , 2),
+                   alpha = rep(0.8, 2), 
+                   cex = rep(1.5, 3))
+
+
+```
+
