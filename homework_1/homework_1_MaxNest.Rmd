@@ -293,6 +293,7 @@ diffExpGenes_Tcell_types <- merged[which(merged$padj < 0.01), 8]
 universe <- as.character(merged[, 8])
 
 
+
 # enrichment GO-annotation for Tcell_types - design
 ego <- enrichGO(gene          = diffExpGenes_Tcell_types,
                 universe      = universe,
@@ -307,6 +308,7 @@ ego <- enrichGO(gene          = diffExpGenes_Tcell_types,
 ##### DiffExpGenes Tissue_types
 diffExpGenes_Tissue_types <- merged[which(merged_Tissue_types$padj < 0.01), 8]
 universe_Tissue_types <- as.character(merged_Tissue_types[, 8])
+
 
 # enrichent GO-annotation for Tissue_types - design
 ego_Tissue_types <- enrichGO( gene = diffExpGenes_Tissue_types,
@@ -330,10 +332,18 @@ ego_Tissue_types <- enrichGO( gene = diffExpGenes_Tissue_types,
 
 common_diffExpGenes <- intersect(diffExpGenes_Tcell_types, diffExpGenes_Tissue_types)
 
+
+# ENSEMBLID of significant DE genes from Tcells-types design
+significant_res <- rownames(res[which(res$padj < 0.01),])
+# ENSEMBLID of significant DE genes from Tissue-types design
+significant_res2 <- rownames(res_2[which(res_2$padj < 0.01),])
+# commont significant DE genes
+common_significant <- intersect(significant_res, significant_res2)
+
 grid.newpage()
-draw.pairwise.venn(length(diffExpGenes_Tcell_types),
-                   length(diffExpGenes_Tissue_types),
-                   length(common_diffExpGenes),
+draw.pairwise.venn(length(significant_res),
+                   length(significant_res2),
+                   length(common_significant),
                    category = c("Treg vs Tconv", "Tumor tissue vs Normal tissue"),
                    cat.dist = c(0.05, 0.05),
                    cat.pos = c(-0.7, 0.5),
@@ -342,6 +352,9 @@ draw.pairwise.venn(length(diffExpGenes_Tcell_types),
                    lwd = rep(0.5 , 2),
                    alpha = rep(0.8, 2), 
                    cex = rep(1.5, 3))
+
+
+
 
 
 ```
