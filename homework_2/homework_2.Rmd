@@ -1,0 +1,111 @@
+---
+title: '"Homework_2: Clustering"'
+author: "Maxim_Nest"
+date: '6 апреля 2017 г '
+output: html_document
+---
+
+```{r setup, message=FALSE, error=FALSE, warning=FALSE}
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(amap)
+library(dbscan)
+options(width=120)
+
+
+```
+
+### Задание 1: Иерархическая кластеризация
+
+```{r read_data, message=FALSE, error=FALSE, warning=FALSE}
+
+counts <- read.csv("GSE89225_Illumina_counts.csv", row.names=1)
+conditions <- read.csv("conditions.csv", row.names=1)
+projection <- read.csv("projection.csv", row.names = 1)
+
+
+
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = conditions,
+                              design = ~ tissue + cells)
+
+# select genes with "optimal" expression
+dds <- dds[rowSums(counts(dds)) > 20, ]
+# 8000 genes
+dds <- head(dds, 8000)
+# create object
+dds <- DESeq(dds)
+
+# log expression and correlation, dissimilarity
+
+cor_samples <- cor(assay(rlog(dds)))
+cor_dissim <- 1 - cor_samples
+dissim_dist <- dist(cor_dissim)
+
+# clusters 
+
+clust_average <- hclust(dissim_dist, method="average")
+clust_single <- hclust(dissim_dist, method="single")
+clust_complete <- hclust(dissim_dist, method="complete")
+
+# plots 
+
+plot(clust_average, main = "Cluster Dendrogram: Average")
+plot(clust_single, main = "Cluster Dendrogram: Single")
+plot(clust_complete, main = "Cluster Dendrogram: Complete")
+
+```
+
+### Задание 2: K-means
+
+```{r k_means, error=FALSE, warning=FALSE, message=FALSE}
+
+# K-means
+rlg <- assay(rlog(dds))
+clusters <- Kmeans(rlg, 6, method="correlation", iter.max = 20000)
+
+# cluster - as factor for visualization
+cluster_df <- as.data.frame(clusters$cluster)
+colnames(cluster_df) <- "cluster"
+cluster_df$cluster <- as.factor(cluster_df$cluster)
+
+# order
+order_data <- rlg[order(clusters$cluster), 
+                        order(conditions$cells, conditions$tissue)]
+
+order_data <- t(apply(order_data, 1, function(r) {
+  (r - min(r)) / (max(r) - min(r))
+}))
+
+# heatmap for ordered data 
+
+#png("heatmap_ordered_data.png", width=6, height=20, units="in", res=300)
+
+pheatmap(order_data, 
+         show_rownames = F, 
+         cluster_rows = F, 
+         cluster_cols = F,
+         annotation_col = conditions, annotation_row = cluster_df)
+
+#dev.off()
+
+```
+
+
+### Density based algorithms
+
+```{r density_based_algorithms, warning=FALSE, error=FALSE, message=FALSE}
+
+db_clust <- dbscan(projection, 3)
+db_clust$cluster <- as.factor(db_clust$cluster)
+
+# without colored clusters
+gg_without_clusters <- ggplot(projection, aes(x = TSNE.1, y= TSNE.2)) + geom_point() + labs(title = "   ggplot WITHOUT clusters   ") + theme_bw()
+gg_without_clusters
+
+# with clusters - aes(col)
+gg_clusters <- ggplot(projection, aes(x = TSNE.1, y= TSNE.2, col=db_clust$cluster)) + geom_point() + labs(title = "   Density based algorithms WITH clusters    ") + theme_bw()
+gg_clusters
+```
+
