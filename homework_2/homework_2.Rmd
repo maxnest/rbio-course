@@ -12,7 +12,7 @@ library(pheatmap)
 library(amap)
 library(dbscan)
 options(width=120)
-
+library(dplyr)
 
 ```
 
@@ -32,6 +32,7 @@ dds <- DESeqDataSetFromMatrix(countData = counts,
 
 # select genes with "optimal" expression
 dds <- dds[rowSums(counts(dds)) > 20, ]
+dds <- dds[order(rowSums(counts(dds)), decreasing = T), ]
 # 8000 genes
 dds <- head(dds, 8000)
 # create object
@@ -60,10 +61,28 @@ plot(clust_complete, main = "Cluster Dendrogram: Complete")
 ### Задание 2: K-means
 
 ```{r k_means, error=FALSE, warning=FALSE, message=FALSE}
+#### without outlier
+
+counts <- select(counts, -(treg_NBP_patient3))
+conditions  <- conditions[-12, ]
+
+dds_2 <- DESeqDataSetFromMatrix(countData = counts,
+                              colData = conditions,
+                              design = ~ tissue + cells)
+
+# select genes with "optimal" expression
+dds_2 <- dds_2[rowSums(counts(dds_2)) > 20, ]
+dds_2 <- dds_2[order(rowSums(counts(dds_2)), decreasing = T), ]
+# 8000 genes
+dds_2 <- head(dds_2, 8000)
+# create object
+dds_2 <- DESeq(dds_2)
+
+#####
 
 # K-means
-rlg <- assay(rlog(dds))
-clusters <- Kmeans(rlg, 6, method="correlation", iter.max = 20000)
+rlg_2 <- assay(rlog(dds_2))
+clusters <- Kmeans(rlg_2, 6, method="correlation", iter.max = 20000)
 
 # cluster - as factor for visualization
 cluster_df <- as.data.frame(clusters$cluster)
@@ -71,7 +90,7 @@ colnames(cluster_df) <- "cluster"
 cluster_df$cluster <- as.factor(cluster_df$cluster)
 
 # order
-order_data <- rlg[order(clusters$cluster), 
+order_data <- rlg_2[order(clusters$cluster), 
                         order(conditions$cells, conditions$tissue)]
 
 order_data <- t(apply(order_data, 1, function(r) {
