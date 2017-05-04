@@ -1,0 +1,229 @@
+---
+title: "SQL_Homework"
+author: "Maxim_Nest"
+date: '3 мая 2017 г '
+output: html_document
+---
+```{r libs, warning=FALSE, message=FALSE}
+
+library(RSQLite)
+library(DBI)
+
+```
+
+```{r connection , warning=FALSE, message=FALSE, cache=TRUE}
+
+
+# устаналиваем соединение с базой
+FirstFm <- dbConnect(RSQLite::SQLite(), "data.sqlite")
+dbListTables(FirstFm)
+
+lines <- readLines("firstfm_creation.txt")
+# склеиваем
+command <- paste(lines, collapse = " ")
+# разбиваем
+commands <- strsplit(command, ";")[[1]]
+
+# прерываем соединение с базой
+dbDisconnect(FirstFm)
+
+
+```
+
+### Запрос: Имена пользователей в алфавитном порядке ###
+
+```{r 1_request, warning=FALSE, message=FALSE}
+FirstFm <- dbConnect(RSQLite::SQLite(), "data.sqlite")
+
+users <- dbGetQuery(FirstFm, "SELECT * FROM Users ORDER BY username")
+
+head(users)
+```
+
+### Запрос: Имя пользователя и Дата регистрации ###
+
+```{r 2_request, warning=FALSE, message=FALSE}
+
+last_5_reg <- dbGetQuery(FirstFm, "SELECT username, registered FROM Users 
+                       ORDER BY registered DESC LIMIT 5")
+
+last_5_reg
+
+```
+
+### Запрос: Имя пользователя и Прослушанные треки ###
+
+```{r 3_request , warning=FALSE, message=FALSE}
+
+user_tracks <- dbGetQuery(FirstFm, "SELECT * FROM Listened 
+                          JOIN Users WHERE user_id = id
+                          GROUP BY username 
+                          ORDER BY COUNT(song_id) DESC
+                          LIMIT 5")
+
+user_tracks
+```
+
+### Запрос: Исполнитель и количество альбомов ###
+
+```{r 4_request, warning=FALSE, message=FALSE}
+
+artist_alb_count <- dbGetQuery(FirstFm, "SELECT Artists.name AS Artist, 
+                                COUNT(DISTINCT Albums.name) AS Number_of_Albums 
+                                FROM Albums
+                                JOIN Artists ON Artists.id = Albums.artist_id 
+                                GROUP BY artist_id")
+
+head(artist_alb_count)
+
+```
+
+### Запрос: Исполнитель и количество песен ###
+
+```{r 5_request, warning=FALSE, message=FALSE}
+
+artist_song_count <- dbGetQuery(FirstFm, "SELECT Artists.name AS Artist,
+                                COUNT(DISTINCT Songs.name) AS Number_of_Songs
+                                FROM Songs 
+                                JOIN Artists ON Artists.id = Albums.artist_id
+                                JOIN Albums ON Albums.id = Songs.album_id
+                                GROUP BY artist_id")
+
+head(artist_song_count)
+
+```
+
+### Запрос: Исполнитель и самый длинный альбом (по числу песен) ###
+
+```{r 6_request, warning=FALSE, message=FALSE}
+
+artist_alb_length <- dbGetQuery(FirstFm, "SELECT Artists.name AS Artist,
+                                Albums.name As Title_of_album,
+                                COUNT(Songs.id) AS Song_Number
+                                FROM Songs 
+                                JOIN Artists ON Artists.id = Albums.artist_id
+                                JOIN Albums ON Albums.id = Songs.album_id
+                                GROUP BY album_id
+                                ORDER BY Song_Number DESC
+                                LIMIT 1")
+
+artist_alb_length
+
+```
+
+### Запрос: Самый длинный альбом по продолжительности (в секундах) ###
+
+```{r 7_request, warning=FALSE, message=FALSE}
+
+artist_alb_duration <- dbGetQuery(FirstFm, "SELECT Artists.name AS Artist, 
+                                  Albums.name AS Title_of_album, 
+                                  TOTAL(Songs.duration) AS Duration_in_sec
+                                  FROM Songs
+                                  JOIN Artists ON Artists.id = Albums.artist_id
+                                  JOIN Albums ON Albums.id = Songs.album_id
+                                  GROUP BY album_id
+                                  ORDER BY Duration_in_sec DESC
+                                  LIMIT 1")
+
+artist_alb_duration
+
+```
+
+### Запрос: Альбом самой большой средней продолжительности ### 
+
+```{r 8_request, warning=FALSE, message=FALSE}
+
+alb_average_duration <- dbGetQuery(FirstFm, "SELECT Artists.name AS Artist,
+                                Albums.name AS Title_of_album, 
+                                AVG(Songs.duration) AS Average_Duration_in_sec
+                                FROM Songs
+                                JOIN Artists ON Artists.id = Albums.artist_id
+                                JOIN Albums ON Albums.id = Songs.album_id
+                                GROUP BY album_id
+                                ORDER BY Average_Duration_in_sec DESC
+                                LIMIT 1")
+
+alb_average_duration
+
+```
+
+### Запрос: 5 самых прослушиваемых песен ###
+
+```{r 9_request, warning=FALSE, message=FALSE}
+
+top_5_listened_songs <- dbGetQuery(FirstFm, "SELECT Artists.name AS Artist,
+                                   Albums.name AS Title_of_album,
+                                   Songs.name As Song_name,
+                                   COUNT(Listened.song_id) AS Number_of_Play
+                                   FROM Songs
+                                   JOIN Artists ON Artists.id = Albums.artist_id
+                                   JOIN Albums ON Albums.id = Songs.album_id
+                                   JOIN Listened ON Songs.id = Listened.song_id
+                                   GROUP BY Songs.id
+                                   ORDER BY Number_of_Play DESC 
+                                   LIMIT 5")
+
+top_5_listened_songs
+
+```
+
+### Запрос: год, когда были выпущены наиболее "прослушиваемые" песни ###
+
+```{r 10_request, warning=FALSE, message=FALSE}
+
+year_top_listened <- dbGetQuery(FirstFm, 
+                                "SELECT Albums.release_year As Year_of_resealse,
+                                COUNT(Listened.song_id) AS Top_listened
+                                FROM Songs
+                                JOIN Albums ON Albums.id = Songs.album_id
+                                JOIN Listened ON Songs.id = Listened.song_id
+                                GROUP BY Albums.release_year
+                                ORDER BY Top_listened DESC
+                                LIMIT 1")
+
+year_top_listened
+
+```
+
+### Запрос: Топ 20 последних прослушенных треков для пользователя (id=47) ###
+
+```{r 11_request, warning=FALSE, message=FALSE}
+
+top_20_song <- dbGetQuery(FirstFm, 
+                                "SELECT Artists.name AS Artist, 
+                                Albums.name AS Title_of_album,
+                                Songs.name AS Song_name,
+                                Listened.start_time AS Data
+                                FROM Songs
+                                JOIN Artists ON Artists.id = Albums.artist_id
+                                JOIN Albums ON Albums.id = Songs.album_id
+                                JOIN Listened ON Songs.id = Listened.song_id
+                                WHERE user_id = 47
+                                ORDER BY Data DESC
+                                LIMIT 20")
+
+top_20_song
+```
+
+### Запрос последний: JOINS ###
+
+```{r final_request, warning=FALSE, message=FALSE}
+
+joins <- dbGetQuery(FirstFm, "SELECT Users.username AS Name_of_User,
+                    Artists.name AS Name_of_Artist,
+                    Albums.name AS Title_of_album,
+                    Songs.name AS Song_name,
+                    COUNT(Listened.song_id) AS Number_of_play
+                    FROM Songs
+                    JOIN Users ON Users.id = Listened.user_id
+                    JOIN Artists ON Artists.id = Albums.artist_id
+                    JOIN Albums ON Albums.id = Songs.album_id
+                    JOIN Listened ON Songs.id = Listened.song_id
+                    GROUP BY Name_of_User, Song_name")
+
+head(joins)
+```
+
+
+
+

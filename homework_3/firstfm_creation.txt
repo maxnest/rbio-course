@@ -1,0 +1,29 @@
+create table Users (
+	id integer primary key autoincrement , -- user id
+	username text unique not null , -- username ,
+	registered datetime not null -- when user
+				-- registered
+);
+create table Artists (
+	id integer primary key autoincrement , -- artist id
+	name text not null -- name
+);
+create table Albums (
+	id integer primary key autoincrement , -- album id
+	artist_id integer not null , -- artist who recorded
+	name text not null , -- albums title
+	release_year int -- year of release
+);
+create table Songs (
+	id integer primary key autoincrement , -- song id
+	album_id integer not null , -- album id
+	name text not null , -- songs title
+	position text , -- position inside album
+	duration integer -- duration in seconds
+);
+create table Listened (
+	user_id integer not null , -- user id
+	song_id integer not null , -- song id
+	start_time datetime not null -- when user listened
+				-- to it
+);
