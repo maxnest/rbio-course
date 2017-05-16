@@ -1,0 +1,49 @@
+---
+title: "Proteomic_analyis"
+author: "Maxim_Nest"
+date: '16 мая 2017 г '
+output: html_document
+---
+```{r lib, echo = TRUE, warning = FALSE, message=FALSE}
+library(stringr)
+library(pcaMethods)
+
+```
+
+#### Импортируем сырые данные и подготавливаем данные к анализу
+
+```{r data, echo = TRUE, warning= FALSE, message= FALSE}
+
+amoeba_data <- read.csv("Amoeba_csv.csv", header = T, row.names = 1, sep = ";", dec = ".")
+# str(amoeba_data)
+
+
+# Rename column in raw data
+col_names <- c(colnames(amoeba_data))
+new_names <- sapply(col_names,function(x) str_extract(x, "[A-Za-z0-9_.]{1,10}"))
+new_names <- str_replace_all(new_names, "[.]", "_")
+colnames(amoeba_data) <- new_names
+
+str(amoeba_data)
+
+# Replace NA
+# We cannot use knn - "a colomn has more than 80% missing values"
+colSums(is.na(amoeba_data))
+trans_amoeba_data <- t(amoeba_data)
+
+# Uncomment and look at the Error
+#scaled_trans <- prep(trans_amoeba_data, scale= "uv" , 
+#                    center=TRUE , simple=FALSE)
+
+# PCA 
+# pc <- pca(scaled_trans$data, method="bpca", nPcs=2 )
+# complete_obs <- completeObs(pc)
+
+# scaled_complete <- prep(complete_obs, scale = scaled_trans$scale, 
+#                        center =  scaled_trans$center, reverse = TRUE)
+
+
+
+```
+
+
