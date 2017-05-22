@@ -1,0 +1,301 @@
+---
+title: "DT_homework"
+author: "Maxim Nesterenko and Daria Aleshkina"
+date: '13 мая 2017 г '
+output: html_document
+---
+
+```{r lib, echo = TRUE, message=FALSE, warning=FALSE, error=FALSE}
+library(randomForest)
+library(ggplot2)
+```
+
+### Подготовка данных
+
+```{r data_prep, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+ages <- read.table("ages.tsv", sep="\t", header=1)
+methylation <- read.table("methylation.tsv", sep="\t", header=1, row.names = 1, na.strings = "NA")
+
+meth_t <- t(methylation[,4:ncol(methylation)])
+new_data <- data.frame(cbind(age=ages$Age, meth_t))
+new_data[is.na(new_data)] <- 0
+
+print(new_data[, 1])
+cor_vector <- sapply(new_data[-1], function(x) cor(x, new_data$age))
+abs_cor <- sort(abs(cor_vector), decreasing = T)[1:10]
+
+select_data <-cbind(age=new_data$age, new_data[, names(abs_cor)])
+
+```
+
+### Тренировочная и валидирующая выборки
+
+```{r sets, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+set.seed(77)
+# 80%
+training <- sample(1:nrow(select_data), 40)
+# 20%
+validation <- (1:nrow(select_data))[-training]
+
+
+training_data <- select_data[training, ]
+validating_data <- select_data[validation, ]
+
+```
+
+### Функция-обертка
+
+```{r fun, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE}
+
+wrapper <- function(train.data, train.response,
+                    test.data, test.response, 
+                    runs.number=50, ...) {
+        
+        num_of_iteration <- seq(1: runs.number)
+        
+        train_data_fit <- lapply(num_of_iteration, function(x) randomForest(train.response ~ . , data= train.data, ...))
+        
+        RMSE_train <- lapply(train_data_fit, 
+                             function(x) sqrt((1/nrow(train.data))*(sum((predict(x, train.data)- train.response)**2))))
+        RMSE_test <- lapply(train_data_fit,
+                            function(x) sqrt((1/nrow(test.data))*(sum((predict(x, test.data)- test.response)**2))))
+        
+    #sum((predict(x, data) - test.response)**2)
+        return(c(mean(as.numeric(RMSE_train)), mean(as.numeric(RMSE_test))))
+        }
+
+```
+
+### Примеры работы функции со значениями по умолчанию (500 девевьев) и с измененными параметрами (1 дерево)
+
+```{r fun_test, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE}
+
+# randomForest with default
+errors.defaults <- wrapper(training_data[-1], training_data$age, validating_data[-1], validating_data$age, 50)
+print(errors.defaults)
+
+# randomForest with ntree = 1
+errors.ntree_1 <- wrapper(training_data[-1], training_data$age, validating_data[-1], validating_data$age, 50, ntree=1)
+print(errors.ntree_1)
+
+
+```
+
+Результаты, полученные с 1 деревом значимо хуже, чем с большим количеством деревьев
+
+### Оптимизация обучения
+
+```{r opt_learning, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE}
+
+errors.overfit <- wrapper(training_data[-1], training_data$age,
+                          validating_data[-1], validating_data$age, 50, 
+                          nodsize=1, replace=F, sampsize=40, mtry=10, ntree=100)
+
+print(errors.overfit)
+
+# visual
+
+seq_ntree = seq(1, 1000, 5)
+ntree_test <- sapply(seq_ntree, function(num) wrapper(training_data[-1],
+                                                      training_data$age,
+                                                      validating_data[-1], 
+                                        validating_data$age, ntree = num))
+
+#print(ntree_test)
+
+toPlot_ntree <- rbind(
+    data.frame(Num_of_Tree=seq_ntree, SSE=ntree_test[1, ], dataset="Train"),
+    data.frame(Num_of_Tree=seq_ntree, SSE=ntree_test[2, ], dataset="Validation")
+)
+  
+ggplot(data=toPlot_ntree, aes(x=Num_of_Tree, y=SSE, color=dataset)) +
+    geom_point(size=3) + scale_y_log10() + 
+    scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)) + 
+    scale_x_continuous(breaks = c(seq(0, 1000, 100))) +
+    geom_line(size=2) + ggtitle("SSE Plot") +
+    theme_bw()
+
+
+```
+
+Нам кажется, что после 200 значения, увеличение количества деревьев не влияет на результат ни в худшую, ни в лучшую сторону. 
+
+### Replase and Sampsize
+#### График зависимости ошибки от sampsize (1:40) при replace=F
+
+```{r repl, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE }
+seq_samplsize <- seq(1, 40)
+repl_F <- sapply(seq_samplsize, function(num) wrapper(training_data[-1],
+                                                      training_data$age,
+                                                      validating_data[-1], 
+                                        validating_data$age, ntree = 200, 
+                                        mtry=10,
+                                        nodesize=1,
+                                        replace=FALSE, sampsize = num))
+
+toPlot_repl_F <- rbind(
+    data.frame(Sample_Size=seq_samplsize, SSE=repl_F[1, ], dataset="Train"),
+    data.frame(Sample_Size=seq_samplsize, SSE=repl_F[2, ], dataset="Validation")
+)
+
+
+repl_F_gg <- ggplot(data=toPlot_repl_F, aes(x=Sample_Size, y=SSE, color=dataset)) +
+    geom_point(size=3) + scale_y_log10() + 
+    scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)) + 
+    geom_line(size=2) + ggtitle("SSE Plot") +
+    theme_bw()
+
+repl_F_gg
+
+```
+
+#### График зависимости ошибки от sampsize (1:40) при replace=T
+
+```{r repl_T, echo=TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+repl_T <- sapply(seq_samplsize, function(num) wrapper(training_data[-1],
+                                                      training_data$age,
+                                                      validating_data[-1], 
+                                        validating_data$age, ntree = 200, 
+                                        mtry=10,
+                                        nodesize=1,
+                                        replace=TRUE, sampsize = num))
+
+toPlot_repl_T <- rbind(
+    data.frame(Sample_Size=seq_samplsize, SSE=repl_T[1, ], dataset="Train"),
+    data.frame(Sample_Size=seq_samplsize, SSE=repl_T[2, ], dataset="Validation")
+)
+
+
+repl_T_gg <- ggplot(data=toPlot_repl_T, aes(x=Sample_Size, y=SSE, color=dataset)) +
+    geom_point(size=3) + scale_y_log10() + 
+    scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)) + 
+    geom_line(size=2) + ggtitle("SSE Plot") +
+    theme_bw()
+
+repl_T_gg
+
+```
+
+Переобучение мы наблюдаем при параметре replace=F. Наиболее оптимальными параметрами для последующей работы мы считаем: sampsize = 40, replace = T
+
+
+### Nodesize 
+```{r nodsize, echo= TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+nodesize_seq <- seq(1, 40)
+nodesize_test <- sapply(nodesize_seq, function(num) wrapper(training_data[-1],
+                                                      training_data$age,
+                                                      validating_data[-1], 
+                                        validating_data$age, ntree = 200, 
+                                        mtry=10,
+                                        nodesize=num,
+                                        replace=TRUE, sampsize =  40))
+
+toPlot_nodesize <- rbind(
+    data.frame(Node_Size=nodesize_seq, SSE=nodesize_test[1, ], dataset="Train"),
+    data.frame(Node_Size=nodesize_seq, SSE=nodesize_test[2, ], dataset="Validation")
+)
+
+
+nodesize_gg <- ggplot(data=toPlot_nodesize, aes(x=Node_Size, y=SSE, color=dataset)) +
+    geom_point(size=3) + scale_y_log10() + 
+    scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)) + 
+    scale_x_continuous(breaks = seq(0, 40, 5)) + 
+    geom_line(size=2) + ggtitle("SSE Plot") +
+    theme_bw()
+
+nodesize_gg
+```
+
+Мы наблюдаем переобучение, когда наша модель не может сформировать группы значимых размеров. На графике этот наблюдается в виде резкого снижения в левой части графика (при маленьких значениях Node_Size). Для следующего шага мы выбрали значение nodesize = 5. 
+
+### MTRY
+
+```{r mtry, echo= TRUE, message=FALSE, warning=FALSE, error=FALSE}
+
+mtry_seq <- seq(1, 10)
+mtry_test <- sapply(mtry_seq, function(num) wrapper(training_data[-1],
+                                                      training_data$age,
+                                                      validating_data[-1], 
+                                        validating_data$age, ntree = 200, 
+                                        mtry=num,
+                                        nodesize=5,
+                                        replace=TRUE, sampsize = 40))
+
+toPlot_mtry <- rbind(
+    data.frame(MTRY=mtry_seq, SSE=mtry_test[1, ], dataset="Train"),
+    data.frame(MTRY=mtry_seq, SSE=mtry_test[2, ], dataset="Validation")
+)
+
+
+mtry_gg <- ggplot(data=toPlot_mtry, aes(x=MTRY, y=SSE, color=dataset)) +
+    geom_point(size=3) + scale_y_log10() + 
+    scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12, 14, 16, 18, 20)) + 
+    geom_line(size=2) + ggtitle("SSE Plot") +
+    theme_bw()
+
+mtry_gg
+
+```
+
+Наблюдаем переобучение, выбираем значение mtry=10. 
+
+### CROSS VALIDATION
+
+```{r cross_validation, echo=TRUE, warning=FALSE, message=FALSE, error=FALSE}
+
+cross.validation <- matrix(sample(1:50, 50), nrow=5, ncol=10)
+cross.validation
+
+print(select_data$age[validation])
+
+cross.results <- apply(cross.validation, 1, function(validation){
+  # using each part as testing dataset
+  # using rest of the dataset as training dataset
+  train.sample <- (1:50)[-validation]
+  train.data <- select_data[train.sample, -1]
+  train.response <- select_data$age[train.sample]
+  test.data <- select_data[validation, -1]
+  test.response <- select_data$age[validation]
+  
+  #print(train.data)
+  
+  # calculating RMSE for every part and default random forest
+  return(wrapper(train.data, train.response, test.data, test.response, 100))
+})
+
+print(cross.results)
+print(rowMeans(cross.results))
+
+
+```
+
+Теперь запустим randomforest с нашими подобранными параметрами:
+
+```{r}
+
+cross.results_our <- apply(cross.validation, 1, function(validation){
+  # using each part as testing dataset
+  # using rest of the dataset as training dataset
+  train.sample <- (1:50)[-validation]
+  train.data <- select_data[train.sample, -1]
+  train.response <- select_data$age[train.sample]
+  test.data <- select_data[validation, -1]
+  test.response <- select_data$age[validation]
+  
+  # calculating RMSE for every part and default random forest
+  return(wrapper(train.data, train.response, test.data, test.response, 100, ntree = 200, mtry=10, nodesize=5, replace=TRUE, sampsize = 40))
+})
+
+print(cross.results_our)
+print(rowMeans(cross.results_our))
+```
+
+
+### Вывод
+
+Мы подобрали параметры для random forest для минимизации ошибки, с которыми модель работает примерно также, как и с параметрами по умолчанию. То есть наши параметры дают результат чуть лучше на тренирующих, и чуть хуже на валидирующих данных, чем параметры "по умолчанию"
+
