@@ -1,0 +1,165 @@
+---
+title: "Final_Homework"
+author: "M. Nesterenko and L. Danilov"
+date: '25 июня 2017 г '
+output: html_document
+---
+
+```{r libs, echo=TRUE, warning=FALSE, error=FALSE, message=FALSE}
+library(OpenImageR)
+library(mxnet)
+```
+
+```{r prep_data, echo=TRUE, warning=FALSE, error=FALSE, message=FALSE}
+
+data <- read.csv("patch_labels.csv", header = FALSE)
+#class: 
+# 0 - normal tissue 
+# 1 - centrilobular emphysema (CLE)
+# 2 - paraseptal emphysema (PSE)
+data_dim <- dim(data)
+features <- 61 * 61
+# 168 pic and 50 variation
+dataset_size <- data_dim[1]*50
+
+nn_data_x <- matrix(0, nrow=dataset_size, ncol=features)
+nn_data_y <- vector(length=dataset_size)
+
+# rep 50 
+rep_data <- rep(as.matrix(data), each=50)
+# data for random selection 
+angles <- seq(1, 360, 10)
+shift <- seq(-20, 20, 5)
+
+# flip_mode = "horizontal" 
+# rotation: rotate_angle = x, rotate_method = 'bilinear'
+# shift: shift_cols = 10, shift_rows = 5
+
+##### dataset creation #####
+
+mx.set.seed(1)
+# training_data_size - 80 % || (134 * 50)
+training_data_size <- round(0.8 * data_dim[1])
+# validation_data_size - 20 % || (34 * 50)
+validation_data_size <- round(0.2 * data_dim[1])
+# sets
+training_set <- sample(1:data_dim[1], training_data_size)
+validation_set <- (1:data_dim[1])[-training_set]
+
+##### how to find correct rows? #####
+
+find_correct_rows <- function(data_set){
+  answer <- sapply(data_set, 
+                   function(x) seq(x*50, (x + 1)*50)- 1)
+  return(as.vector(answer))
+}
+
+# correct rows
+validation_set_rows <- find_correct_rows(validation_set)
+
+##### multiply pictures #####
+
+for (i in 1:168){
+  file <- paste0("patches/", "patch", i, ".jpg")
+  patch <- readImage(file)
+  for (j in 1:50){
+  # random selection of options
+    angle <- sample(angles, 1, replace = T)
+    rows_shift_value <- sample(shift, 1, replace = T)
+    cols_shift_value <- sample(shift, 1, replace = T)
+    # formation
+    patchAugmented <- Augmentation(patch, flip_mode = "horizontal", 
+                                   rotate_angle = angle, 
+                                   rotate_method = 'bilinear',
+                                   shift_rows = rows_shift_value, 
+                                   shift_cols = cols_shift_value, zca_comps = 30, 
+                                   zca_epsilon = 0.1, threads = 1, verbose = F)
+    # coordinates 
+    coordinates <- as.numeric((i - 1) * 50 + j)
+    # addition
+    nn_data_x[coordinates, ] <- as.numeric(patchAugmented)
+    nn_data_y[coordinates] <- rep_data[coordinates]
+  }
+}
+
+##### validation data #####
+validation_data_x <- nn_data_x[validation_set_rows,]
+validation_data_y <- nn_data_y[validation_set_rows]
+dim(validation_data_x)[1] == length(validation_data_y) 
+
+#####  training data  #####
+training_data_x <- nn_data_x[-validation_set_rows,]
+training_data_y <- nn_data_y[-validation_set_rows]
+dim(training_data_x)[1] == length(training_data_y)
+```
+
+#### Сверточная нейронная сеть
+
+```{r cnn, echo=TRUE, error=FALSE, message=FALSE, warning=FALSE}
+
+training_array <- t(training_data_x)
+# dim(training_array) = 3821 6672
+dim(training_array) <- c(61, 61, 1, ncol(training_array))
+validating_array <- t(validation_data_x)
+dim(validating_array) <- c(61, 61, 1, ncol(validating_array))
+
+
+data <- mx.symbol.Variable('data')
+conv_0 <- mx.symbol.Convolution(data = data, kernel = c(5, 5), num_filter = 10)
+#activ_0 <- mx.symbol.LeakyReLU(conv_0, slope=0)
+activ_0 <- mx.symbol.Activation(conv_0, act.type = "tanh")
+pool_0 <- mx.symbol.Pooling(activ_0, kernel=c(2, 2), 
+                            stride=c(2, 2), pool.type="max")
+conv_1 <- mx.symbol.Convolution(pool_0, kernel = c(5, 5), num_filter = 10)
+activ_1 <- mx.symbol.Activation(conv_1, act.type = "tanh")
+pool_1 <- mx.symbol.Pooling(activ_1, kernel=c(2, 2), 
+                            stride=c(2, 2), pool.type="max")
+#additional layer
+conv_2 <- mx.symbol.Convolution(pool_1, kernel = c(5, 5), num_filter = 10)
+# with "softrelu" - Train-accuracy=0.917305424528302 
+#         and Validation-accuracy=0.651785714285714
+activ_2 <- mx.symbol.Activation(conv_2, act.type = "softrelu")
+pool_2 <- mx.symbol.Pooling(activ_2, kernel=c(2, 2), 
+                           stride=c(2, 2), pool.type="max")
+
+fully_connected_0 <- mx.symbol.FullyConnected(pool_2, num_hidden = 3)
+nn_model <- mx.symbol.SoftmaxOutput(fully_connected_0)
+
+### check it
+
+outline_of_nn <- graph.viz(nn_model)
+outline_of_nn
+
+
+### training
+model <- mx.model.FeedForward.create(nn_model, 
+                                     X=training_array, 
+                                     y=as.array(training_data_y-1),
+                                     eval.data = list(
+                                       data=validating_array,
+                                       label=as.array(validation_data_y-1)
+                                     ),
+                                     ctx=mx.cpu(), 
+                                     num.round = 100,
+                                     optimizer="adadelta",
+                                     eval.metric = mx.metric.accuracy,
+                                     epoch.end.callback =   mx.callback.log.train.metric(10))
+
+
+```
+
+В случае использования предложенной в материалах архитектуры нейронной сети у нас точность классификации на **тестирующих данных** была на уровне, кхм, подбрасывания монетки - *0.53125*. Постарались хоть как-то улучшить результат...
+
+![Caption](deeper.png)
+
+Последний результат, который был получен при измененной архитектуре нейронной сети:
+                       **Train-accuracy**= *0.94030070754717*
+                       **Validation-accuracy**= *0.60546875*
+                       а иногда и до - *0.651785714285714*
+
+На этом и решили остановиться!
+
+P.S. Костя, спасибо большое за интересный курс и отличные домашние задания ^___^
+                       
+
+
